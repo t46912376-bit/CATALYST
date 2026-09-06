@@ -1,0 +1,50 @@
+{
+    "NMAP": {
+        "name": "Nmap",
+        "description": "Network discovery and security auditing",
+        "command": "nmap",
+        "category": "NETWORK"
+    },
+    "WIRESHARK": {
+        "name": "Wireshark",
+        "description": "Network protocol analyzer",
+        "command": "wireshark",
+        "category": "NETWORK"
+    },
+    "CURL": {
+        "name": "cURL",
+        "description": "HTTP and network transfer utility",
+        "command": "curl",
+        "category": "UTILITY"
+    },
+    "NSLOOKUP": {
+        "name": "NSLookup",
+        "description": "DNS query and troubleshooting utility",
+        "command": "nslookup",
+        "category": "DNS"
+    },
+    "TRACERT": {
+        "name": "Traceroute",
+        "description": "Trace the path to a network host",
+        "command": "tracert",
+        "category": "NETWORK"
+    },
+    "NETSTAT": {
+        "name": "Netstat",
+        "description": "Display active network connections",
+        "command": "netstat",
+        "category": "NETWORK"
+    },
+    "PING": {
+        "name": "Ping",
+        "description": "Basic network connectivity testing",
+        "command": "ping",
+        "category": "NETWORK"
+    },
+    "IPCONFIG": {
+        "name": "IPConfig",
+        "description": "Display and manage network configuration",
+        "command": "ipconfig",
+        "category": "SYSTEM"
+    }
+}

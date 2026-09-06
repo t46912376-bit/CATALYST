@@ -1,0 +1,22 @@
+{
+    "tools": [
+        {
+            "name": "NETWORK SCANNER",
+            "description": "Local network discovery utility.",
+            "category": "RECON",
+            "exe": ""
+        },
+        {
+            "name": "PACKET VIEWER",
+            "description": "Inspect network traffic in an authorized lab.",
+            "category": "NETWORK",
+            "exe": ""
+        },
+        {
+            "name": "WEB ANALYZER",
+            "description": "Web security analysis utility.",
+            "category": "WEB",
+            "exe": ""
+        }
+    ]
+}
