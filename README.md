@@ -59,6 +59,8 @@ CATALYST.exe
 
 No manual Python setup should be required when using the packaged release.
 
+The software may be flagged as a virus, this is due to it coming with LOIC and HOIC, just add the file to your exclusions.
+
 ---
 
 ### Option 2 — Run From Source
