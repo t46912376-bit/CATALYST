@@ -1,3 +1,4 @@
+import re
 import sys
 import json
 import math
@@ -16,7 +17,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 # ============================================================
 
 APP_NAME = "CATALYST"
-VERSION = "5.0"
+VERSION = "6.0"
 
 BASE_DIR = Path(__file__).resolve().parent
 TOOLS_DIR = BASE_DIR / "tools"
@@ -226,6 +227,43 @@ def find_executable(command):
             return str(path)
 
     return None
+
+
+def discover_tool_executables():
+    """Return every .exe directly inside the CATALYST tools folder."""
+    if not TOOLS_DIR.exists():
+        return []
+
+    return sorted(
+        [path for path in TOOLS_DIR.glob("*.exe") if path.is_file()],
+        key=lambda p: p.name.lower()
+    )
+
+
+def tool_already_registered(executable, database):
+    """Match a local executable against saved command/path entries."""
+    try:
+        target = Path(executable).resolve()
+    except Exception:
+        target = Path(executable)
+
+    for tool in database.values():
+        command = str(tool.get("command", "")).strip()
+        if not command:
+            continue
+
+        candidate = find_executable(command)
+        if candidate:
+            try:
+                if Path(candidate).resolve() == target:
+                    return True
+            except Exception:
+                pass
+
+        if Path(command).name.lower() == target.name.lower():
+            return True
+
+    return False
 
 
 # ============================================================
@@ -2148,6 +2186,160 @@ def create_options_dialog(
 
 
 # ============================================================
+# CUSTOM TOOL CONFIGURATION
+# ============================================================
+
+class CustomToolDialog(QtWidgets.QDialog):
+
+    TAB_NAMES = [
+        "COMMAND",
+        "RESEARCH",
+        "CODE LAB",
+        "PERMISSIONS"
+    ]
+
+    def __init__(self, executable, parent=None):
+        super().__init__(parent)
+
+        self.executable = Path(executable)
+
+        self.setWindowTitle(
+            f"CATALYST // NEW TOOL // {self.executable.name.upper()}"
+        )
+
+        self.setMinimumWidth(560)
+        self.setModal(True)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(25, 25, 25, 25)
+        layout.setSpacing(12)
+
+        title = QtWidgets.QLabel("NEW TOOL DETECTED")
+        title.setObjectName("DialogTitle")
+        layout.addWidget(title)
+
+        subtitle = QtWidgets.QLabel(
+            "CUSTOM REGISTRY // CONFIGURE BEFORE FIRST USE"
+        )
+        subtitle.setObjectName("DialogSubtitle")
+        layout.addWidget(subtitle)
+
+        layout.addWidget(HudLine())
+
+        detected = QtWidgets.QLabel(
+            f"[NEW] {self.executable.name.upper()}\n"
+            f"PATH  : {self.executable}"
+        )
+        detected.setObjectName("DetectedTool")
+        detected.setWordWrap(True)
+        layout.addWidget(detected)
+
+        self.name = make_line_edit(
+            "DISPLAY NAME",
+            self.executable.stem.upper()
+        )
+
+        self.description = make_line_edit(
+            "DESCRIPTION",
+            "Custom local executable"
+        )
+
+        self.tab = QtWidgets.QComboBox()
+        self.tab.addItems(self.TAB_NAMES)
+
+        self.mode = QtWidgets.QComboBox()
+        self.mode.addItems([
+            "Command line / terminal output",
+            "GUI application"
+        ])
+
+        self.arguments = make_line_edit(
+            "OPTIONAL STARTUP ARGUMENTS"
+        )
+
+        add_form_row(layout, "NAME", self.name)
+        add_form_row(layout, "DESCRIPTION", self.description)
+        add_form_row(layout, "TAB", self.tab)
+        add_form_row(layout, "LAUNCH MODE", self.mode)
+        add_form_row(layout, "ARGUMENTS", self.arguments)
+
+        preview_label = QtWidgets.QLabel("REGISTRY PREVIEW")
+        preview_label.setObjectName("TinyLabel")
+        layout.addWidget(preview_label)
+
+        self.preview = QtWidgets.QLabel()
+        self.preview.setObjectName("CustomPreview")
+        self.preview.setWordWrap(True)
+        layout.addWidget(self.preview)
+
+        for widget in (
+            self.name,
+            self.description,
+            self.arguments
+        ):
+            widget.textChanged.connect(self.update_preview)
+
+        self.tab.currentIndexChanged.connect(self.update_preview)
+        self.mode.currentIndexChanged.connect(self.update_preview)
+
+        buttons = QtWidgets.QHBoxLayout()
+
+        cancel = QtWidgets.QPushButton("IGNORE")
+        cancel.setObjectName("DialogButton")
+
+        save = QtWidgets.QPushButton("REGISTER TOOL")
+        save.setObjectName("LaunchButton")
+
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.accept)
+
+        buttons.addWidget(cancel)
+        buttons.addStretch()
+        buttons.addWidget(save)
+
+        layout.addLayout(buttons)
+
+        self.update_preview()
+
+    def update_preview(self):
+        name = self.name.text().strip() or self.executable.stem.upper()
+        tab = self.tab.currentText()
+        mode = "GUI" if self.mode.currentIndex() == 1 else "CLI"
+
+        self.preview.setText(
+            f"{name}  //  {tab}  //  {mode}\n"
+            f"EXECUTABLE: {self.executable.name}"
+        )
+
+    def get_tool(self):
+        name = self.name.text().strip() or self.executable.stem.upper()
+
+        key = name.upper()
+        key = re.sub(r"[^A-Z0-9_]+", "_", key).strip("_")
+
+        if not key:
+            key = self.executable.stem.upper()
+
+        return key, {
+            "name": name,
+            "description": (
+                self.description.text().strip()
+                or "Custom local executable"
+            ),
+            "command": str(self.executable),
+            "category": self.tab.currentText(),
+            "tab": self.tab.currentText(),
+            "launch_mode": (
+                "gui"
+                if self.mode.currentIndex() == 1
+                else "cli"
+            ),
+            "arguments": self.arguments.text().split(),
+            "custom": True
+        }
+
+
+# ============================================================
 # ADD TOOL DIALOG
 # ============================================================
 
@@ -2229,11 +2421,14 @@ class AddToolDialog(
             "DESCRIPTION"
         )
 
-        self.category = QtWidgets.QLineEdit()
+        self.category = QtWidgets.QComboBox()
 
-        self.category.setPlaceholderText(
-            "CATEGORY"
-        )
+        self.category.addItems([
+            "COMMAND",
+            "RESEARCH",
+            "CODE LAB",
+            "PERMISSIONS"
+        ])
 
         layout.addWidget(
             self.name
@@ -2317,8 +2512,19 @@ class AddToolDialog(
                 command,
 
             "category":
-                self.category.text().strip().upper()
-                or "CUSTOM"
+                self.category.currentText(),
+
+            "tab":
+                self.category.currentText(),
+
+            "custom":
+                True,
+
+            "launch_mode":
+                "cli",
+
+            "arguments":
+                []
 
         }
 
@@ -2380,6 +2586,27 @@ class CatalystWindow(
         )
 
         self.update_telemetry()
+
+        self.tool_scan_timer = QtCore.QTimer(self)
+        self.tool_scan_timer.timeout.connect(self.background_tool_scan)
+        self.tool_scan_timer.start(2500)
+
+    def background_tool_scan(self):
+        """Automatically notice new .exe files without restarting."""
+        new_files = [
+            exe
+            for exe in discover_tool_executables()
+            if not tool_already_registered(exe, self.database)
+        ]
+
+        if not new_files:
+            return
+
+        self.log_message(
+            f"[AUTO-DETECT] {len(new_files)} new tool(s) waiting for configuration"
+        )
+
+        self.scan_new_executables(show_dialogs=True)
 
     # ========================================================
     # BUILD UI
@@ -2521,7 +2748,7 @@ class CatalystWindow(
         )
 
         nav_hint = QtWidgets.QLabel(
-            "NUMBER KEYS 1-6"
+            "NUMBER KEYS 1-7"
         )
 
         nav_hint.setObjectName(
@@ -2544,7 +2771,8 @@ class CatalystWindow(
             "CODE LAB",
             "STATS",
             "PERMISSIONS",
-            "LOGS"
+            "LOGS",
+            "CUSTOM"
         ]
 
         for index, text in enumerate(
@@ -2639,16 +2867,16 @@ class CatalystWindow(
         )
 
         self.pages.addWidget(
-            self.make_info_page(
+            self.make_tool_page(
                 "RESEARCH",
-                "Research module ready."
+                "RESEARCH TOOLS // LOCAL UTILITIES"
             )
         )
 
         self.pages.addWidget(
-            self.make_info_page(
+            self.make_tool_page(
                 "CODE LAB",
-                "Development environment ready."
+                "DEVELOPMENT TOOLS // LOCAL UTILITIES"
             )
         )
 
@@ -2657,14 +2885,18 @@ class CatalystWindow(
         )
 
         self.pages.addWidget(
-            self.make_info_page(
+            self.make_tool_page(
                 "PERMISSIONS",
-                "Local execution and registered tool control."
+                "AUTHORIZED LOCAL EXECUTION // TOOL CONTROL"
             )
         )
 
         self.pages.addWidget(
             self.make_logs_page()
+        )
+
+        self.pages.addWidget(
+            self.make_custom_page()
         )
 
         self.pages.currentChanged.connect(
@@ -2732,7 +2964,7 @@ class CatalystWindow(
     ):
 
         for index in range(
-            6
+            7
         ):
 
             shortcut = QtGui.QShortcut(
@@ -2929,6 +3161,22 @@ class CatalystWindow(
 
         telemetry.addWidget(
             add_button
+        )
+
+        rescan_button = QtWidgets.QPushButton(
+            "⟳ RESCAN TOOLS"
+        )
+
+        rescan_button.setObjectName(
+            "MinimalButton"
+        )
+
+        rescan_button.clicked.connect(
+            self.rescan_tools
+        )
+
+        telemetry.addWidget(
+            rescan_button
         )
 
         layout.addLayout(
@@ -3167,6 +3415,173 @@ class CatalystWindow(
         self.refresh_tools()
 
         return page
+
+    # ========================================================
+    # GENERIC TOOL PAGE
+    # ========================================================
+
+    def make_tool_page(
+        self,
+        title_text,
+        description
+    ):
+        page = QtWidgets.QWidget()
+
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(5, 0, 5, 0)
+        layout.setSpacing(10)
+
+        title = QtWidgets.QLabel(title_text)
+        title.setObjectName("PageTitle")
+
+        subtitle = QtWidgets.QLabel(description)
+        subtitle.setObjectName("PageSubtitle")
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(HudLine())
+
+        registry = QtWidgets.QLabel("ASSIGNED TOOLS")
+        registry.setObjectName("TinyLabel")
+        layout.addWidget(registry)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOff
+        )
+
+        container = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(container)
+        grid.setContentsMargins(0, 4, 8, 8)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        for column in range(3):
+            grid.setColumnStretch(column, 1)
+
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        page.setProperty("tool_tab", title_text)
+        page._tool_grid = grid
+
+        return page
+
+    def make_custom_page(self):
+        page = QtWidgets.QWidget()
+
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(5, 0, 5, 0)
+        layout.setSpacing(10)
+
+        title = QtWidgets.QLabel("CUSTOM")
+        title.setObjectName("PageTitle")
+
+        subtitle = QtWidgets.QLabel(
+            "DROP .EXE FILES INTO /TOOLS — CATALYST WILL DETECT THEM"
+        )
+        subtitle.setObjectName("PageSubtitle")
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(HudLine())
+
+        self.custom_status = QtWidgets.QLabel(
+            "SCANNING TOOL DIRECTORY..."
+        )
+        self.custom_status.setObjectName("TerminalStatus")
+        layout.addWidget(self.custom_status)
+
+        self.custom_list = QtWidgets.QVBoxLayout()
+        self.custom_list.setSpacing(7)
+        layout.addLayout(self.custom_list)
+
+        layout.addStretch()
+
+        return page
+
+    def rebuild_assigned_tool_pages(self):
+        """Put configured tools on their selected navigation page."""
+        page_names = {
+            0: "COMMAND",
+            1: "RESEARCH",
+            2: "CODE LAB",
+            4: "PERMISSIONS"
+        }
+
+        for index, page_name in page_names.items():
+            page = self.pages.widget(index)
+            grid = getattr(page, "_tool_grid", None)
+
+            if grid is None:
+                continue
+
+            while grid.count():
+                item = grid.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.deleteLater()
+
+            entries = [
+                (key, tool)
+                for key, tool in self.database.items()
+                if tool.get("tab", "COMMAND").upper() == page_name
+            ]
+
+            for position, (key, tool) in enumerate(entries):
+                entry = ToolEntry(key, tool)
+                entry.launchRequested.connect(self.launch_tool)
+
+                row = position // 3
+                column = position % 3
+                grid.addWidget(entry, row, column)
+
+        if hasattr(self, "custom_status"):
+            custom_count = sum(
+                1 for tool in self.database.values()
+                if tool.get("custom", False)
+            )
+            self.custom_status.setText(
+                f"CUSTOM REGISTRY // {custom_count} CONFIGURED // "
+                f"DROP .EXE INTO TOOLS TO ADD MORE"
+            )
+
+    def rebuild_custom_page(self):
+        if not hasattr(self, "custom_list"):
+            return
+
+        while self.custom_list.count():
+            item = self.custom_list.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        custom_tools = [
+            (key, tool)
+            for key, tool in self.database.items()
+            if tool.get("custom", False)
+        ]
+
+        if not custom_tools:
+            empty = QtWidgets.QLabel(
+                "[ CUSTOM REGISTRY EMPTY ]\n\n"
+                "Drop an .EXE into the tools folder and restart CATALYST."
+            )
+            empty.setObjectName("ModuleText")
+            empty.setAlignment(QtCore.Qt.AlignCenter)
+            self.custom_list.addWidget(empty)
+            return
+
+        for key, tool in custom_tools:
+            line = QtWidgets.QLabel(
+                f"> {tool.get('name', key).upper()}   //   "
+                f"{tool.get('tab', 'COMMAND')}   //   "
+                f"{tool.get('command', '')}"
+            )
+            line.setObjectName("CustomRegistryLine")
+            self.custom_list.addWidget(line)
 
     # ========================================================
     # INFO PAGE
@@ -3453,41 +3868,26 @@ class CatalystWindow(
     def refresh_tools(
         self
     ):
-
+        # COMMAND keeps the original live-output/tool registry.
         while self.tools_grid.count():
-
-            item = self.tools_grid.takeAt(
-                0
-            )
-
+            item = self.tools_grid.takeAt(0)
             widget = item.widget()
-
             if widget:
-
                 widget.deleteLater()
 
         self.tool_entries.clear()
 
-        for index, key in enumerate(
-            self.database
-        ):
+        command_tools = [
+            (key, tool)
+            for key, tool in self.database.items()
+            if tool.get("tab", "COMMAND").upper() == "COMMAND"
+        ]
 
-            tool = self.database[
-                key
-            ]
+        for index, (key, tool) in enumerate(command_tools):
+            entry = ToolEntry(key, tool)
+            entry.launchRequested.connect(self.launch_tool)
 
-            entry = ToolEntry(
-                key,
-                tool
-            )
-
-            entry.launchRequested.connect(
-                self.launch_tool
-            )
-
-            self.tool_entries[
-                key
-            ] = entry
+            self.tool_entries[key] = entry
 
             row = index // 3
             column = index % 3
@@ -3498,6 +3898,8 @@ class CatalystWindow(
                 column
             )
 
+        self.rebuild_assigned_tool_pages()
+        self.rebuild_custom_page()
         self.update_tool_count()
 
     # ========================================================
@@ -3540,6 +3942,89 @@ class CatalystWindow(
 
             entry.setVisible(
                 text in searchable
+            )
+
+    # ========================================================
+    # AUTO DISCOVER NEW EXES
+    # ========================================================
+
+    def scan_new_executables(self, show_dialogs=True):
+        new_files = [
+            exe
+            for exe in discover_tool_executables()
+            if not tool_already_registered(exe, self.database)
+        ]
+
+        if not new_files:
+            return []
+
+        self.log_message(
+            f"[DISCOVERY] {len(new_files)} NEW EXECUTABLE(S) DETECTED"
+        )
+
+        configured = []
+
+        for executable in new_files:
+            self.show_terminal(
+                f"\n[NEW TOOL DETECTED] {executable.name}\n"
+            )
+
+            if not show_dialogs:
+                continue
+
+            self.pages.setCurrentIndex(6)
+
+            dialog = CustomToolDialog(
+                executable,
+                self
+            )
+
+            if dialog.exec() != QtWidgets.QDialog.Accepted:
+                self.log_message(
+                    f"[IGNORED] {executable.name}"
+                )
+                continue
+
+            result = dialog.get_tool()
+
+            if not result:
+                continue
+
+            key, tool = result
+
+            # Avoid collisions with existing keys.
+            base_key = key
+            counter = 2
+            while key in self.database:
+                key = f"{base_key}_{counter}"
+                counter += 1
+
+            self.database[key] = tool
+            configured.append(tool["name"])
+
+            self.log_message(
+                f"[AUTO-REGISTER] {tool['name']} :: "
+                f"{tool['tab']} :: {executable.name}"
+            )
+
+        if configured:
+            save_database(self.database)
+            self.refresh_tools()
+
+        return configured
+
+    def rescan_tools(self):
+        found = self.scan_new_executables(show_dialogs=True)
+
+        if found:
+            self.show_terminal(
+                "\n[CATALYST] NEW TOOLS REGISTERED:\n"
+                + "\n".join(f"  > {name}" for name in found)
+                + "\n"
+            )
+        else:
+            self.show_terminal(
+                "\n[CATALYST] TOOL DIRECTORY SCAN COMPLETE :: NO NEW TOOLS\n"
             )
 
     # ========================================================
@@ -3655,7 +4140,7 @@ class CatalystWindow(
         # GUI TOOL
         # ----------------------------------------------------
 
-        if key == "WIRESHARK":
+        if key == "WIRESHARK" or tool.get("launch_mode") == "gui":
 
             self.launch_gui_tool(
                 tool,
@@ -3663,6 +4148,22 @@ class CatalystWindow(
             )
 
             return
+
+        # ----------------------------------------------------
+        # SAVED CUSTOM ARGUMENTS
+        # ----------------------------------------------------
+
+        if tool.get("custom"):
+            saved_args = tool.get("arguments", [])
+
+            if saved_args:
+                self.start_process(
+                    key,
+                    tool,
+                    executable,
+                    saved_args
+                )
+                return
 
         # ----------------------------------------------------
         # OPTIONS
@@ -4168,34 +4669,96 @@ class CatalystWindow(
     def boot_sequence(
         self
     ):
+        boot_lines = [
+            "[OK] Initializing totally legitimate software...",
+            "[OK] Checking your mom's phone................ FOUND",
+            "[OK] Checking your dad's browser history...... CLASSIFIED",
+            "[OK] Checking your WiFi......................... PASSWORD: ********",
+            "[OK] Checking fridge contents................... 2% MILK REMAINING",
+            "[OK] Locating missing socks..................... NO RESULTS",
+            "[OK] Downloading more RAM........................ SUCCESS",
+            "[OK] Asking NASA for permission.................. DENIED",
+            "[OK] Bribing the firewall........................ $0.00 BUDGET",
+            "[OK] Scanning for hackers........................ 47 FOUND",
+            "[OK] Scanning for actual cybersecurity skills.... NONE",
+            "[OK] Increasing hacker level..................... +9000",
+            "[OK] Installing Matrix.exe........................ COMPLETE",
+            "[OK] Enabling RGB................................ CRITICAL",
+            "[OK] Calibrating keyboard......................... TOO MANY SHORTCUTS",
+            "[OK] Checking IP address.......................... 127.0.0.1",
+            "[OK] Hiding IP address............................ JUST KIDDING",
+            "[OK] Contacting anonymous......................... NO RESPONSE",
+            "[OK] Checking Discord status....................... ONLINE",
+            "[OK] Checking homework............................ IGNORED",
+            "[OK] Checking browser tabs........................ 173",
+            "[OK] Closing browser tabs......................... FAILED",
+            "[OK] Searching for vulnerabilities................ IN THE USER",
+            "[OK] Touching grass................................ ERROR 404",
+            "[OK] Checking keyboard............................ CRUSTY",
+            "[OK] Checking mouse............................... GAMING",
+            "[OK] Installing illegal amount of confidence....... DONE",
+        ]
 
-        self.log_message(
-            "CATALYST CORE INITIALIZED"
+        self.show_terminal(
+            "\n"
+            "============================================================\n"
+            " C A T A L Y S T  //  BOOT SEQUENCE\n"
+            "============================================================\n"
         )
 
+        for line in boot_lines:
+            self.show_terminal(line + "\n")
+
+        self.log_message("CATALYST CORE INITIALIZED")
         self.log_message(
             f"DATABASE // {len(self.database)} SYSTEMS"
         )
+        self.log_message("FORERUNNER HUD ONLINE")
+        self.log_message("QPROCESS EXECUTION ENGINE READY")
+        self.log_message("LOCAL EXECUTION MODE")
 
-        self.log_message(
-            "FORERUNNER HUD ONLINE"
+        self.show_terminal(
+            "\n"
+            "[OK] Loading suspicious-looking terminal......... DONE\n"
+            "[OK] Generating hacker name...................... xX_D4rkH4x0r_Xx\n"
+            "[OK] Checking if name is taken................... YES\n"
+            "[OK] Ignoring that................................ DONE\n"
+            "\n"
+            "[+] Establishing secure connection...\n"
+            "[+] Encrypting absolutely nothing...\n"
+            "[+] Decrypting absolutely nothing...\n"
+            "\n"
         )
 
-        self.log_message(
-            "QPROCESS EXECUTION ENGINE READY"
+        discovered = self.scan_new_executables(show_dialogs=True)
+
+        if discovered:
+            self.show_terminal(
+                "\n[OK] NEW TOOLS CONFIGURED....................... "
+                f"{len(discovered)}\n"
+            )
+        else:
+            self.show_terminal(
+                "\n[OK] TOOL DIRECTORY............................. CLEAN\n"
+            )
+
+        self.show_terminal(
+            "\n"
+            "------------------------------------------------------------\n"
+            "SYSTEM STATUS: ● TOTALLY LEGIT\n"
+            "HACKER LEVEL:  ████████████████████ 100%\n"
+            "BRAIN CELLS:   ██░░░░░░░░░░░░░░░░░░ 11%\n"
+            "SKILL LEVEL:   █░░░░░░░░░░░░░░░░░░░ 3%\n"
+            "RGB POWER:     ████████████████████ MAXIMUM\n"
+            "------------------------------------------------------------\n"
+            "> CATALYST INITIALIZED\n"
+            "> Welcome, elite hacker.\n"
+            "\n"
+            "[ PRESS ANY KEY TO PRETEND YOU KNOW WHAT YOU'RE DOING ]\n"
         )
 
-        self.log_message(
-            "LOCAL EXECUTION MODE"
-        )
-
-        self.system_status.setText(
-            "● ONLINE"
-        )
-
-        self.core_status.setText(
-            "● CORE ONLINE"
-        )
+        self.system_status.setText("● ONLINE")
+        self.core_status.setText("● CORE ONLINE")
 
     # ========================================================
     # NAVIGATION
@@ -4966,6 +5529,29 @@ def apply_global_style(
             );
         }
 
+
+        /* ==================================================
+           CUSTOM REGISTRY
+           ================================================== */
+
+        #DetectedTool,
+        #CustomPreview {
+            color: #57d8e6;
+            background: #040c11;
+            border: 1px solid #16434f;
+            padding: 10px;
+            font-family: "Consolas", monospace;
+            font-size: 9px;
+        }
+
+        #CustomRegistryLine {
+            color: #5ed7e4;
+            background: rgba(2, 10, 14, 150);
+            border-left: 2px solid #277b89;
+            padding: 8px;
+            font-family: "Consolas", monospace;
+            font-size: 9px;
+        }
 
         /* ==================================================
            FOOTER
